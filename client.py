@@ -151,13 +151,14 @@ def train_gc_SSP(client, model, dataloaders, local_epoch, device, train_preproce
             client.current_mean = (1 - client.momentum) * client.current_mean + client.momentum * current_mean
             if client.global_consensus is not None:
                 mse_loss = torch.mean(0.5 * (client.current_mean - client.global_consensus)**2)
-                output = client.model.head(rep + client.local_consensus)
-                loss = client.model.loss(output, label)
+                pred_pgpa = client.model.head(rep + client.local_consensus)
+                loss = client.model.loss(pred_pgpa, label)
                 loss = loss + mse_loss * client.tau
             else:
-                output = client.model.head(rep)
-                loss = client.model.loss(output, label)
-            pred1 = torch.softmax(pred, dim=1)
+                pred_pgpa = client.model.head(rep)
+                loss = client.model.loss(pred_pgpa, label)
+
+            pred1 = torch.softmax(pred_pgpa, dim=1)
             pred_labels = torch.argmax(pred1, dim=1)
             correct_predictions = pred_labels.eq(label).sum().item()
             acc_sum += correct_predictions
@@ -183,8 +184,9 @@ def train_gc_SSP(client, model, dataloaders, local_epoch, device, train_preproce
             'valAccs': accs_val,
             'testLosses': losses_test, 'testAccs': accs_test}
 
-def eval_gc_test(model, device, client):
 
+
+def eval_gc_test(model, device, client):
     model.eval()
     total_loss = 0.
     acc_sum = 0.
@@ -195,14 +197,13 @@ def eval_gc_test(model, device, client):
         x = g.ndata['feat']
         e, u, g, length, label = e.to(device), u.to(device), g.to(device), length.to(device), label.to(device)
         with torch.no_grad():
-            pred, rep, rep_base = client.model(e, u, g, length, x, is_rep=True, context=client.context)
+            rep, pred = client.model(e, u, g, length, x)
             acc_sum += pred.max(dim=1)[1].eq(label).sum().item()
             loss = model.loss(pred, label)
         total_loss += loss.item() * num_graphs
         ngraphs += num_graphs
 
     return total_loss/ngraphs, acc_sum/ngraphs
-
 
 def eval_gc_val(model, device, client):
 
@@ -249,13 +250,12 @@ class clientAvgSSP(Client_GC):
         self.local_consensus = nn.Parameter(Variable(torch.zeros_like(rep[0])))
         self.opt_local_consensus = torch.optim.SGD([self.local_consensus], lr=self.learning_rate)
 
-    def train_gc_SSP(client, model, dataloaders, optimizer, local_epoch, device, train_preprocessed_batches):
+    def train_gc_SSP(client, model, dataloaders, local_epoch, device, train_preprocessed_batches):
         losses_train, accs_train, losses_val, accs_val, losses_test, accs_test = [], [], [], [], [], []
         train_loader, val_loader, test_loader = dataloaders['train'], dataloaders['val'], dataloaders['test']
 
         for epoch in range(local_epoch):
             model.train()
-
             total_loss = 0.
             ngraphs = 0
             acc_sum = 0
@@ -265,38 +265,40 @@ class clientAvgSSP(Client_GC):
                 optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-8,
                                               weight_decay=5e-4)
                 optimizer.zero_grad()
-                pred = model(e, u, g, length)
-                rep = pred
-                current_mean = torch.mean(rep, dim=0)
-
+                client.current_mean.zero_()
+                client.num_batches_tracked.zero_()
+                x = g.ndata['feat']
+                rep, pred = model(e, u, g, length, x)
+                current_mean = torch.mean(rep, dim=0).to(device)
+                client.current_mean = client.current_mean.to(device)
+                client.local_consensus = client.local_consensus.to(device)
                 if client.num_batches_tracked is not None:
                     client.num_batches_tracked.add_(1)
-
                 client.current_mean = (1 - client.momentum) * client.current_mean + client.momentum * current_mean
                 if client.global_consensus is not None:
-                    mse_loss = torch.mean(0.5 * (client.current_mean - client.global_consensus)**2)
-                    output = client.model.head(rep + client.local_consensus)
-                    loss = client.model.loss(output, label)
+                    mse_loss = torch.mean(0.5 * (client.current_mean - client.global_consensus) ** 2)
+                    pred_pgpa = client.model.head(rep + client.local_consensus)
+                    loss = client.model.loss(pred_pgpa, label)
                     loss = loss + mse_loss * client.tau
                 else:
-                    output = client.model.head(rep)
-                    loss = client.loss(output, label)
-                pred1 = torch.sigmoid(pred[:, 1])
-                pred_labels = (pred1 > 0.5).float()
+                    pred_pgpa = client.model.head(rep)
+                    loss = client.model.loss(pred_pgpa, label)
+
+                pred1 = torch.softmax(pred_pgpa, dim=1)
+                pred_labels = torch.argmax(pred1, dim=1)
                 correct_predictions = pred_labels.eq(label).sum().item()
                 acc_sum += correct_predictions
-
+                optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+                client.opt_local_consensus.step()
+                client.current_mean.detach_()
                 total_loss += loss.item() * label.size(0)
                 ngraphs += label.size(0)
-
             total_loss /= ngraphs
             acc = acc_sum / ngraphs
-
-            loss_v, acc_v = eval_gc_val(model, device, client)
-            loss_tt, acc_tt = eval_gc_test(model, device, client)
-
+            loss_v, acc_v = eval_gc_val_SSP(model, device, client)
+            loss_tt, acc_tt = eval_gc_test_SSP(model, device, client)
             losses_train.append(total_loss)
             accs_train.append(acc)
             losses_val.append(loss_v)
@@ -310,6 +312,7 @@ class clientAvgSSP(Client_GC):
 
 
 def eval_gc_test_SSP(model, device, client):
+
     model.eval()
     total_loss = 0.
     acc_sum = 0.
@@ -320,8 +323,9 @@ def eval_gc_test_SSP(model, device, client):
         x = g.ndata['feat']
         e, u, g, length, label = e.to(device), u.to(device), g.to(device), length.to(device), label.to(device)
         with torch.no_grad():
-            rep, pred = client.model(e, u, g, length, x)
-            acc_sum += pred.max(dim=1)[1].eq(label).sum().item()
+            pred, rep, rep_base = client.model(e, u, g, length, x, is_rep=True, context=client.context)
+            pred_pgpa = client.model.head(rep + client.local_consensus)
+            acc_sum += pred_pgpa.max(dim=1)[1].eq(label).sum().item()
             loss = model.loss(pred, label)
         total_loss += loss.item() * num_graphs
         ngraphs += num_graphs
