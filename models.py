@@ -229,23 +229,55 @@ class Localmodel(nn.Module):
             return out
 
 class Split_model(nn.Module):
-    def __init__(self, base, head):
+    def __init__(self, base, head, preference_module):
         super(Split_model, self).__init__()
 
         self.base = base
         self.head = head
+        self.preference_module = preference_module
 
     def forward(self, e, u, g, length, x, is_rep=False, **kwargs):
         print(f"Inputs: e={e}, u={u}, g={g}, length={length}, x={x}")
         feature = self.base(e, u, g, length, x)
         print(f"Feature from base: {feature}")
+
+        preference_adjustment = self.preference_module(feature)
+        feature_adjusted = feature + preference_adjustment
         if is_rep:
-            return feature, feature, None
-        out = self.head(feature)
-        return feature, out
+            return feature_adjusted, feature, None
+        out = self.head(feature_adjusted)
+        return feature_adjusted, out
 
     def loss(self, pred, label):
         criterion = torch.nn.CrossEntropyLoss()
 
         loss = criterion(pred, label)
         return loss
+    
+class PreferenceModule(nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim, dropout=0.1):
+        """
+        Learnable Preference Module P(δ)
+        Args:
+            input_dim: Dimension of input δ
+            hidden_dim: Dimension of hidden layer
+            output_dim: Dimension of output
+            dropout: Dropout rate for regularization
+        """
+        super(PreferenceModule, self).__init__()
+        self.module = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),  # Linear layer 1
+            nn.ReLU(),                         # Activation
+            nn.Dropout(dropout),               # Dropout for regularization
+            nn.Linear(hidden_dim, output_dim)  # Linear layer 2
+        )
+
+    def forward(self, x):
+        """
+        Forward pass for the preference module
+        Args:
+            x: Input tensor δ
+        Returns:
+            Adjusted preference vector P(δ)
+        """
+        return self.module(x)
