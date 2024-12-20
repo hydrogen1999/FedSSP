@@ -147,7 +147,8 @@ def setup_devices_SSP(splitedData, args):
             former= SSP(num_graph_labels, args.nlayer, node_feature_dim, edge_feature_dim, node_feature_dim[0], args.head, args.hidden)
             head = former.fc
             former.fc = nn.Identity()
-            basicModel = Split_model(former, head)
+            preference_module = PreferenceModule(input_dim=args.hidden, hidden_dim=args.hidden, output_dim=args.hidden)
+            basicModel = Split_model(former, head, preference_module)
             cmodel_gc = copy.deepcopy(basicModel)
         optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, cmodel_gc.parameters()), lr=args.lr,
                                      weight_decay=args.weight_decay)

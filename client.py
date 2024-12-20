@@ -106,10 +106,6 @@ class Client_GC():
         self.momentum = args.momentum
         self.global_consensus = None
 
-        self.current_mean = torch.zeros(args.hidden)
-        self.num_batches_tracked = torch.tensor(0, dtype=torch.long, device=self.device)
-        self.local_consensus = nn.Parameter(Variable(torch.zeros(args.hidden)))
-        self.opt_local_consensus = torch.optim.SGD([self.local_consensus], lr=self.args.lr)
 
     def local_train(self, local_epoch):
         """ For self-train & FedAvg """
@@ -145,37 +141,33 @@ def train_gc_SSP(client, model, dataloaders, local_epoch, device, train_preproce
             optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-8,
                                           weight_decay=5e-4)
             optimizer.zero_grad()
-            client.current_mean.zero_()
-            client.num_batches_tracked.zero_()
+            
             x = g.ndata['feat']
             if 'feat' not in g.ndata:
                 raise ValueError(f"'feat' attribute is missing in the graph. Available attributes: {g.ndata.keys()}")
 
-            rep, pred = model(e, u, g, length, x)
-            current_mean = torch.mean(rep, dim=0).to(device)
-            client.current_mean = client.current_mean.to(device)
-            client.local_consensus = client.local_consensus.to(device)
-            if client.num_batches_tracked is not None:
-                client.num_batches_tracked.add_(1)
-            client.current_mean = (1 - client.momentum) * client.current_mean + client.momentum * current_mean
+            rep_adjusted, rep, preference_adjustment = model(e, u, g, length, x, is_rep=True)
+            
             if client.global_consensus is not None:
-                mse_loss = torch.mean(0.5 * (client.current_mean - client.global_consensus)**2)
-                pred_pgpa = client.model.head(rep + client.local_consensus)
-                loss = client.model.loss(pred_pgpa, label)
-                loss = loss + mse_loss * client.tau
+                mse_loss = torch.mean(0.5 * (preference_adjustment - client.global_consensus) ** 2)
+                pred_pgpa = model.head(rep_adjusted)
+                loss = model.loss(pred_pgpa, label) + mse_loss * client.tau
             else:
-                pred_pgpa = client.model.head(rep)
-                loss = client.model.loss(pred_pgpa, label)
+                pred_pgpa = model.head(rep_adjusted)
+                loss = model.loss(pred_pgpa, label)
 
+            preference_loss = torch.norm(preference_adjustment, p=2)  # L2 regularization
+            total_loss_with_reg = loss + 0.01 * preference_loss  # 0.01 is the regularization weight
+            
+            optimizer.zero_grad()
+            total_loss_with_reg.backward()
+            optimizer.step()
+            
             pred1 = torch.softmax(pred_pgpa, dim=1)
             pred_labels = torch.argmax(pred1, dim=1)
             correct_predictions = pred_labels.eq(label).sum().item()
             acc_sum += correct_predictions
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            client.opt_local_consensus.step()
-            client.current_mean.detach_()
+            
             total_loss += loss.item() * label.size(0)
             ngraphs += label.size(0)
         total_loss /= ngraphs
@@ -189,9 +181,14 @@ def train_gc_SSP(client, model, dataloaders, local_epoch, device, train_preproce
         losses_test.append(loss_tt)
         accs_test.append(acc_tt)
 
-    return {'trainingLosses': losses_train, 'trainingAccs': accs_train, 'valLosses': losses_val,
-            'valAccs': accs_val,
-            'testLosses': losses_test, 'testAccs': accs_test}
+    return {
+        'trainingLosses': losses_train,
+        'trainingAccs': accs_train,
+        'valLosses': losses_val,
+        'valAccs': accs_val,
+        'testLosses': losses_test,
+        'testAccs': accs_test,
+    }
 
 
 
@@ -206,9 +203,16 @@ def eval_gc_test(model, device, client):
         x = g.ndata['feat']
         e, u, g, length, label = e.to(device), u.to(device), g.to(device), length.to(device), label.to(device)
         with torch.no_grad():
-            rep, pred = client.model(e, u, g, length, x)
-            acc_sum += pred.max(dim=1)[1].eq(label).sum().item()
-            loss = model.loss(pred, label)
+            rep_adjusted, rep, preference_adjustment = model(e, u, g, length, x, is_rep=True)
+
+            pred_pgpa = model.head(rep_adjusted)
+            loss = model.loss(pred_pgpa, label)
+
+            pred1 = torch.softmax(pred_pgpa, dim=1)
+            pred_labels = torch.argmax(pred1, dim=1)
+            correct_predictions = pred_labels.eq(label).sum().item()
+            acc_sum += correct_predictions
+
         total_loss += loss.item() * num_graphs
         ngraphs += num_graphs
 
@@ -227,9 +231,16 @@ def eval_gc_val(model, device, client):
         e, u, g, length, label, x = e.to(device), u.to(device), g.to(device), length.to(device), label.to(
             device), x.to(device)
         with torch.no_grad():
-            pred, rep, rep_base = client.model(e, u, g, length, x, is_rep=True, context=client.context)
-            acc_sum += pred.max(dim=1)[1].eq(label).sum().item()
-            loss = model.loss(pred, label)
+            rep_adjusted, rep, preference_adjustment = model(e, u, g, length, x, is_rep=True)
+
+            pred_pgpa = model.head(rep_adjusted)
+            loss = model.loss(pred_pgpa, label)
+
+            pred1 = torch.softmax(pred_pgpa, dim=1)
+            pred_labels = torch.argmax(pred1, dim=1)
+            correct_predictions = pred_labels.eq(label).sum().item()
+            acc_sum += correct_predictions
+
         total_loss += loss.item() * num_graphs
         ngraphs += num_graphs
 
@@ -274,34 +285,34 @@ class clientAvgSSP(Client_GC):
                 optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-8,
                                               weight_decay=5e-4)
                 optimizer.zero_grad()
-                client.current_mean.zero_()
-                client.num_batches_tracked.zero_()
+                
                 x = g.ndata['feat']
-                rep, pred = model(e, u, g, length, x)
-                current_mean = torch.mean(rep, dim=0).to(device)
-                client.current_mean = client.current_mean.to(device)
-                client.local_consensus = client.local_consensus.to(device)
-                if client.num_batches_tracked is not None:
-                    client.num_batches_tracked.add_(1)
-                client.current_mean = (1 - client.momentum) * client.current_mean + client.momentum * current_mean
-                if client.global_consensus is not None:
-                    mse_loss = torch.mean(0.5 * (client.current_mean - client.global_consensus) ** 2)
-                    pred_pgpa = client.model.head(rep + client.local_consensus)
-                    loss = client.model.loss(pred_pgpa, label)
-                    loss = loss + mse_loss * client.tau
-                else:
-                    pred_pgpa = client.model.head(rep)
-                    loss = client.model.loss(pred_pgpa, label)
+                if 'feat' not in g.ndata:
+                    raise ValueError(f"'feat' attribute is missing in the graph. Available attributes: {g.ndata.keys()}")
 
+                rep_adjusted, rep, preference_adjustment = model(e, u, g, length, x, is_rep=True)
+            
+                if client.global_consensus is not None:
+                    mse_loss = torch.mean(0.5 * (preference_adjustment - client.global_consensus) ** 2)
+                    pred_pgpa = model.head(rep_adjusted)
+                    loss = model.loss(pred_pgpa, label) + mse_loss * client.tau
+                else:
+                    pred_pgpa = model.head(rep_adjusted)
+                    loss = model.loss(pred_pgpa, label)
+
+                preference_loss = torch.norm(preference_adjustment, p=2)  # L2 regularization
+                total_loss_with_reg = loss + 0.01 * preference_loss  # 0.01 is the regularization weight
+                
+
+                optimizer.zero_grad()
+                total_loss_with_reg.backward()
+                optimizer.step()
+                
                 pred1 = torch.softmax(pred_pgpa, dim=1)
                 pred_labels = torch.argmax(pred1, dim=1)
                 correct_predictions = pred_labels.eq(label).sum().item()
                 acc_sum += correct_predictions
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                client.opt_local_consensus.step()
-                client.current_mean.detach_()
+                
                 total_loss += loss.item() * label.size(0)
                 ngraphs += label.size(0)
             total_loss /= ngraphs
@@ -332,13 +343,15 @@ def eval_gc_test_SSP(model, device, client):
         x = g.ndata['feat']
         e, u, g, length, label = e.to(device), u.to(device), g.to(device), length.to(device), label.to(device)
         with torch.no_grad():
-            pred, rep, rep_base = client.model(e, u, g, length, x, is_rep=True, context=client.context)
-            if rep is not None:
-                pred_pgpa = client.model.head(rep + client.local_consensus)
-            else:
-                raise ValueError("The variable 'rep' is None. Please check the output of client.model.")
-            acc_sum += pred_pgpa.max(dim=1)[1].eq(label).sum().item()
-            loss = model.loss(pred, label)
+            rep_adjusted, rep, preference_adjustment = model(e, u, g, length, x, is_rep=True)
+
+            pred_pgpa = model.head(rep_adjusted)
+            loss = model.loss(pred_pgpa, label)
+
+            pred1 = torch.softmax(pred_pgpa, dim=1)
+            pred_labels = torch.argmax(pred1, dim=1)
+            correct_predictions = pred_labels.eq(label).sum().item()
+            acc_sum += correct_predictions
         total_loss += loss.item() * num_graphs
         ngraphs += num_graphs
 
@@ -357,12 +370,16 @@ def eval_gc_val_SSP(model, device, client):
         e, u, g, length, label, x = e.to(device), u.to(device), g.to(device), length.to(device), label.to(
             device), x.to(device)
         with torch.no_grad():
-            rep, pred = client.model(e, u, g, length, x)
-            pred1 = torch.softmax(pred, dim=1)
+            rep_adjusted, rep, preference_adjustment = model(e, u, g, length, x, is_rep=True)
+
+            pred_pgpa = model.head(rep_adjusted)
+            loss = model.loss(pred_pgpa, label)
+
+            pred1 = torch.softmax(pred_pgpa, dim=1)
             pred_labels = torch.argmax(pred1, dim=1)
             correct_predictions = pred_labels.eq(label).sum().item()
             acc_sum += correct_predictions
-            loss = model.loss(pred, label)
+
         total_loss += loss.item() * num_graphs
         ngraphs += num_graphs
 

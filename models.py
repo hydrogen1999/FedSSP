@@ -244,7 +244,7 @@ class Split_model(nn.Module):
         preference_adjustment = self.preference_module(feature)
         feature_adjusted = feature + preference_adjustment
         if is_rep:
-            return feature_adjusted, feature, None
+            return feature_adjusted, feature, preference_adjustment
         out = self.head(feature_adjusted)
         return feature_adjusted, out
 

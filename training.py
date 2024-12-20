@@ -32,49 +32,48 @@ def run_fedSSP(args, clients, server, COMMUNICATION_ROUNDS, local_epoch, samp=No
         if (c_round) % 50 == 0:
             print(f"  > round {c_round}")
 
-        if c_round == 1:
-            selected_clients = clients
-        else:
-            selected_clients = sampling_fn(clients, frac)
-            server.selected_clients = selected_clients#新增
-            server.clients = clients
+        selected_clients = sampling_fn(clients, frac) if c_round != 1 else clients
+        server.selected_clients = selected_clients
 
         for client in selected_clients:
             client.local_train(local_epoch)
 
         if c_round != 1:
-            for i, w in enumerate(server.uploaded_weights):
-                w = 1 / len(server.selected_clients)
-                server.uploaded_weights[i] = w
-            global_consensus = 0
-            for cid, w in zip(server.uploaded_ids, server.uploaded_weights):
-                global_consensus += server.clients[cid].current_mean * w
-            for client in server.selected_clients:
-                client.global_consensus = global_consensus.data.clone()
+            # for i, w in enumerate(server.uploaded_weights):
+            #     w = 1 / len(server.selected_clients)
+            #     server.uploaded_weights[i] = w
+            # global_consensus = 0
+            # for cid, w in zip(server.uploaded_ids, server.uploaded_weights):
+            #     global_consensus += server.clients[cid].current_mean * w
+            # for client in server.selected_clients:
+            #     client.global_consensus = global_consensus.data.clone()
             server.receive_models_SSP()
             server.aggregate_parameters_SSP()
             server.send_models_SSP()
 
         else:
-            tot_samples = 0
-            for client in server.selected_clients:
-                tot_samples += client.train_samples
-                server.uploaded_ids.append(client.id)
-                server.uploaded_weights.append(client.train_samples)
-            for i, w in enumerate(server.uploaded_weights):
-                w = w / tot_samples
-                server.uploaded_weights[i] = w
-            global_consensus = 0
-            for cid, w in zip(server.uploaded_ids, server.uploaded_weights):
-                w = 1 / len(server.selected_clients)
-                global_consensus += server.clients[cid].current_mean * w
-            for client in server.selected_clients:
-                client.global_consensus = global_consensus.data.clone()
+            server.receive_models_SSP()
+            server.aggregate_parameters_SSP()
+            server.send_models_SSP()
+        #     tot_samples = 0
+        #     for client in server.selected_clients:
+        #         tot_samples += client.train_samples
+        #         server.uploaded_ids.append(client.id)
+        #         server.uploaded_weights.append(client.train_samples)
+        #     for i, w in enumerate(server.uploaded_weights):
+        #         w = w / tot_samples
+        #         server.uploaded_weights[i] = w
+        #     global_consensus = 0
+        #     for cid, w in zip(server.uploaded_ids, server.uploaded_weights):
+        #         w = 1 / len(server.selected_clients)
+        #         global_consensus += server.clients[cid].current_mean * w
+        #     for client in server.selected_clients:
+        #         client.global_consensus = global_consensus.data.clone()
         if c_round % 1 == 0:
             accs = []
             losses = []
-            for idx in range(len(clients)):
-                loss, acc = clients[idx].evaluate()
+            for client in clients:
+                loss, acc = client.evaluate()
                 accs.append(acc)
                 losses.append(loss)
 
@@ -95,8 +94,3 @@ def run_fedSSP(args, clients, server, COMMUNICATION_ROUNDS, local_epoch, samp=No
     fs = frame.style.apply(highlight_max).data
     print(fs)
     return frame
-
-
-
-
-
