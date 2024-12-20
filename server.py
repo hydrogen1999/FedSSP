@@ -48,20 +48,27 @@ class Server():
             self.uploaded_weights[i] = w / tot_samples
 
     def aggregate_parameters_SSP(self):
-        assert (len(self.uploaded_models) > 0)
+        if not self.uploaded_models or not self.uploaded_weights:
+            raise ValueError("No models or weights uploaded from clients. Ensure at least one client is active.")
 
+        for model in self.uploaded_models:
+            server_params = [name for name, _ in self.global_model.named_parameters()]
+            client_params = [name for name, _ in model.named_parameters()]
+            if server_params != client_params:
+                raise ValueError("Inconsistent model structure between server and client.")
         self.global_model = copy.deepcopy(self.uploaded_models[0])
         for param in self.global_model.parameters():
             param.data.zero_()
+        
+        total_samples = sum(self.uploaded_weights)
+        normalized_weights = [w / total_samples for w in self.uploaded_weights]
 
-        for w, client_model in zip(self.uploaded_weights, self.uploaded_models):
-            self.add_parameters_SSP(w, client_model)
+        for w, client_model in zip(normalized_weights, self.uploaded_models):
+            for (server_name, server_param), (client_name, client_param) in zip(self.global_model.named_parameters(), client_model.named_parameters()):
+                if 'encoder' in server_name:
+                    if any(key in server_name for key in ['encoder', 'phi_e']):
+                    server_param.data += client_param.data.clone() * w
 
-    def add_parameters_SSP(self, w, client_model):
-        w = 1 / len(self.selected_clients)
-        for (server_name, server_param), (client_name, client_param) in zip(self.global_model.named_parameters(), client_model.named_parameters()):
-            if 'encoder' in server_name and 'atom' not in server_name:
-                server_param.data += client_param.data.clone() * w
     def send_models_SSP(self):
         assert (len(self.clients) > 0)
 
