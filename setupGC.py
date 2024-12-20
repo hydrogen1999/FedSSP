@@ -5,6 +5,7 @@ import pandas as pd
 import torch.nn as nn
 import torch
 import copy
+import torch.nn.functional as F
 from torch_geometric.datasets import TUDataset
 from torch_geometric.loader import DataLoader
 from torch_geometric.transforms import OneHotDegree
@@ -56,15 +57,15 @@ def prepareData_multiDS(args, datapath, group='chem', batchSize=128, seed=None):
     for data in datasets:
         print(f"Đang xử lý dataset: {data}")
         if data == "IMDB-BINARY":
-            tudataset = TUDataset(f"{datapath}/TUDataset", data, pre_transform=OneHotDegree(135, cat=False))
+            tudataset = TUDataset(f"{datapath}/TUDataset", data, pre_transform=OneHotDegree(135, cat=False),force_reload=True)
         elif data == "IMDB-MULTI":
-            tudataset = TUDataset(f"{datapath}/TUDataset", data, pre_transform=OneHotDegree(88, cat=False))
+            tudataset = TUDataset(f"{datapath}/TUDataset", data, pre_transform=OneHotDegree(88, cat=False),force_reload=True)
         elif "Letter" in data:
             tudataset = TUDataset(f"{datapath}/TUDataset", data, use_node_attr=True)
         else:
             tudataset = TUDataset(f"{datapath}/TUDataset", data)
         print(f"Tải thành công dataset: {data} - Số lượng đồ thị: {len(tudataset)}")
-
+        print(f"Dataset: {data}, Shape of node features (x): {tudataset[0].x.shape if tudataset[0].x is not None else 'None'}")
         graphs = [x for x in tudataset]
         print("  **", data, len(graphs))
 

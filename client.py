@@ -59,6 +59,9 @@ def collate_pyg_to_dgl(batch):
         g = dgl.graph((edge_index[0], edge_index[1]), num_nodes=num_nodes)
         if data.x is not None:
             g.ndata['feat'] = data.x.cpu()
+        # else:
+        #     g.ndata['feat'] = torch.ones((num_nodes, 1))
+
         graphs.append(g)
 
     g = dgl.batch(graphs)
@@ -145,6 +148,9 @@ def train_gc_SSP(client, model, dataloaders, local_epoch, device, train_preproce
             client.current_mean.zero_()
             client.num_batches_tracked.zero_()
             x = g.ndata['feat']
+            if 'feat' not in g.ndata:
+                raise ValueError(f"'feat' attribute is missing in the graph. Available attributes: {g.ndata.keys()}")
+
             rep, pred = model(e, u, g, length, x)
             current_mean = torch.mean(rep, dim=0).to(device)
             client.current_mean = client.current_mean.to(device)
