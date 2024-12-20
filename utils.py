@@ -3,6 +3,7 @@ from torch_geometric.utils import to_networkx, degree, to_scipy_sparse_matrix
 import torch.nn.functional as F
 from sklearn.model_selection import train_test_split
 from scipy import sparse as sp
+import numpy as np
 
 def convert_to_nodeDegreeFeatures(graphs):
     graph_infos = []

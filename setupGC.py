@@ -34,7 +34,7 @@ def _randChunk(graphs, num_client, overlap, seed=None):
 
 def prepareData_multiDS(args, datapath, group='chem', batchSize=128, seed=None):
     assert group in ['chem', "biochem", 'biochemsn', "biosncv", "chemsn", "chemsncv", "chemcv"]
-
+    print(f"Bắt đầu tải dữ liệu cho nhóm: {group}")
     if group == 'chem':
         datasets = ["MUTAG", "BZR", "COX2", "DHFR", "PTC_MR", "AIDS", "NCI1"]
     elif group == 'biochem':
@@ -54,6 +54,7 @@ def prepareData_multiDS(args, datapath, group='chem', batchSize=128, seed=None):
     splitedData = {}
     df = pd.DataFrame()
     for data in datasets:
+        print(f"Đang xử lý dataset: {data}")
         if data == "IMDB-BINARY":
             tudataset = TUDataset(f"{datapath}/TUDataset", data, pre_transform=OneHotDegree(135, cat=False))
         elif data == "IMDB-MULTI":
@@ -62,21 +63,24 @@ def prepareData_multiDS(args, datapath, group='chem', batchSize=128, seed=None):
             tudataset = TUDataset(f"{datapath}/TUDataset", data, use_node_attr=True)
         else:
             tudataset = TUDataset(f"{datapath}/TUDataset", data)
+        print(f"Tải thành công dataset: {data} - Số lượng đồ thị: {len(tudataset)}")
 
         graphs = [x for x in tudataset]
         print("  **", data, len(graphs))
 
         graphs_train, graphs_valtest = split_data(graphs, test=0.2, shuffle=True, seed=seed)
         graphs_val, graphs_test = split_data(graphs_valtest, train=0.5, test=0.5, shuffle=True, seed=seed)
+        print(f"Dataset {data}: Train={len(graphs_train)}, Val={len(graphs_val)}, Test={len(graphs_test)}")
 
         graphs_train = init_structure_encoding(args, gs=graphs_train, type_init=args.type_init)
         graphs_val = init_structure_encoding(args, gs=graphs_val, type_init=args.type_init)
         graphs_test = init_structure_encoding(args, gs=graphs_test, type_init=args.type_init)
-
+        print(f"Hoàn tất mã hóa cấu trúc cho dataset {data}")
+        
         dataloader_train = DataLoader(graphs_train, batch_size=batchSize, shuffle=True)
         dataloader_val = DataLoader(graphs_val, batch_size=batchSize, shuffle=True)
         dataloader_test = DataLoader(graphs_test, batch_size=batchSize, shuffle=True)
-
+        print(f"DataLoader đã sẵn sàng cho {data}")
         num_node_features = graphs[0].num_node_features
         num_graph_labels = get_numGraphLabels(graphs_train)
 
@@ -84,7 +88,7 @@ def prepareData_multiDS(args, datapath, group='chem', batchSize=128, seed=None):
                              num_node_features, num_graph_labels, len(graphs_train))
 
         df = get_stats(df, data, graphs_train, graphs_val=graphs_val, graphs_test=graphs_test)
-
+    print("Hoàn tất chuẩn bị dữ liệu!")
     return splitedData, df
 
     splitedData = {}
@@ -151,3 +155,22 @@ def setup_devices_SSP(splitedData, args):
 
     server = Server(smodel, args.device)
     return clients, server, idx_clients
+
+
+if __name__ == '__main__':
+    from argparse import Namespace
+
+    args = Namespace(
+        datapath="./Data1/TUDataset/",  # Đường dẫn tới thư mục dữ liệu
+        data_group="chemcv",  # Nhóm dữ liệu
+        batch_size=128,
+        type_init="rw_dg",
+        n_rw=16,
+        n_dg=16
+    )
+
+    print("Đang chuẩn bị dữ liệu...")
+    splitedData, df_stats = prepareData_multiDS(args, args.datapath, args.data_group, args.batch_size)
+    print("Dữ liệu đã được tải về và xử lý thành công.")
+    print("Thông tin thống kê:")
+    print(df_stats)

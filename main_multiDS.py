@@ -71,6 +71,7 @@ if __name__ == '__main__':
                         type=str, default='rw_dg', choices=['rw', 'dg', 'rw_dg', 'ones'])
     parser.add_argument('-mo', "--momentum", type=float, default=0.5)
     parser.add_argument('-tau', "--tau_weight", type=float, default=100.0)
+    parser.add_argument('--head', type=int, default=4, help='Number of attention heads')
     try:
         args = parser.parse_args()
     except IOError as msg:

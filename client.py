@@ -9,6 +9,8 @@ from torch_geometric.utils import add_self_loops
 from models import Split_model
 import torch.nn as nn
 from torch.autograd import Variable
+
+import numpy as np
 def hash_batch(batch):
     hash_obj = hashlib.sha256()
     for data in batch.to_data_list():
@@ -76,6 +78,7 @@ class Client_GC():
         self.optimizer = optimizer
         self.args = args
         self.device = args.device
+        self.context = None
 
         self.W = {key: value for key, value in self.model.named_parameters()}
         self.dW = {key: torch.zeros_like(value) for key, value in self.model.named_parameters()}
@@ -324,7 +327,10 @@ def eval_gc_test_SSP(model, device, client):
         e, u, g, length, label = e.to(device), u.to(device), g.to(device), length.to(device), label.to(device)
         with torch.no_grad():
             pred, rep, rep_base = client.model(e, u, g, length, x, is_rep=True, context=client.context)
-            pred_pgpa = client.model.head(rep + client.local_consensus)
+            if rep is not None:
+                pred_pgpa = client.model.head(rep + client.local_consensus)
+            else:
+                raise ValueError("The variable 'rep' is None. Please check the output of client.model.")
             acc_sum += pred_pgpa.max(dim=1)[1].eq(label).sum().item()
             loss = model.loss(pred, label)
         total_loss += loss.item() * num_graphs

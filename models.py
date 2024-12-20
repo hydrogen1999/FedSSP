@@ -7,7 +7,7 @@ from ogb.utils.features import get_atom_feature_dims, get_bond_feature_dims
 from dgl.nn.pytorch.glob import AvgPooling
 from dgl import function as fn
 from dgl.ops.edge_softmax import edge_softmax
-
+import numpy as np
 
 class AtomEncoder(torch.nn.Module):
 
@@ -235,10 +235,13 @@ class Split_model(nn.Module):
         self.base = base
         self.head = head
 
-    def forward(self, e, u, g, length, x):
+    def forward(self, e, u, g, length, x, is_rep=False, **kwargs):
+        print(f"Inputs: e={e}, u={u}, g={g}, length={length}, x={x}")
         feature = self.base(e, u, g, length, x)
+        print(f"Feature from base: {feature}")
+        if is_rep:
+            return feature, feature, None
         out = self.head(feature)
-
         return feature, out
 
     def loss(self, pred, label):
