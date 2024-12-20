@@ -8,3 +8,5 @@ networkx==3.0
 ogb
 PyYAML
 pydantic
+
+#numpy-1.23.5
